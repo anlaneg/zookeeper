@@ -62,12 +62,14 @@ int addrvec_alloc(addrvec_t *avec)
     return addrvec_grow_default(avec);
 }
 
+//初始化avec,并设置其大小为capacity
 int addrvec_alloc_capacity(addrvec_t* avec, uint32_t capacity)
 {
     addrvec_init(avec);
     return addrvec_grow(avec, capacity);
 }
 
+//将avec扩展grow_amount大小
 int addrvec_grow(addrvec_t *avec, uint32_t grow_amount)
 {
     unsigned int old_capacity = 0;
@@ -87,6 +89,7 @@ int addrvec_grow(addrvec_t *avec, uint32_t grow_amount)
     avec->data = realloc(avec->data, sizeof(*avec->data) * avec->capacity);
     if (avec->data == NULL)
     {
+    	//扩展失败，内存申请失败
         avec->capacity = old_capacity;
         avec->data = old_data;
         errno = ENOMEM;
@@ -96,6 +99,7 @@ int addrvec_grow(addrvec_t *avec, uint32_t grow_amount)
     return 0;
 }
 
+//按默认大小增长avec
 int addrvec_grow_default(addrvec_t *avec)
 {
     return addrvec_grow(avec, ADDRVEC_DEFAULT_GROW_AMOUNT);
@@ -116,6 +120,7 @@ static int addrvec_grow_if_full(addrvec_t *avec)
     return 0;
 }
 
+//检查avec中是否包含addr
 int addrvec_contains(const addrvec_t *avec, const struct sockaddr_storage *addr)
 {
     uint32_t i = 0;
@@ -152,6 +157,7 @@ int addrvec_append(addrvec_t *avec, const struct sockaddr_storage *addr)
     return 0;
 }
 
+//为avec扩弃空间来填充地址信息
 int addrvec_append_addrinfo(addrvec_t *avec, const struct addrinfo *addrinfo)
 {
     int rc = 0;
@@ -174,6 +180,7 @@ int addrvec_append_addrinfo(addrvec_t *avec, const struct addrinfo *addrinfo)
 void addrvec_shuffle(addrvec_t *avec)
 {
     int i = 0;
+    //最多进行avec->count次交换，完成数组打乱
     for (i = avec->count - 1; i > 0; --i) {
         long int j = random()%(i+1);
         if (i != j) {
@@ -234,7 +241,7 @@ void addrvec_peek(addrvec_t *avec, struct sockaddr_storage *next)
     *next = avec->data[index];
 }
 
-
+//比较a1,a2中所含元素是否完全相同（即两个集合是否完全一致）
 int addrvec_eq(const addrvec_t *a1, const addrvec_t *a2)
 {
     uint32_t i = 0;

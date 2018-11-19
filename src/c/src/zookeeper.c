@@ -298,6 +298,7 @@ static void abort_singlethreaded(zhandle_t *zh)
     abort();
 }
 
+//发送buf给对端
 static sendsize_t zookeeper_send(socket_t s, const void* buf, size_t len)
 {
     return send(s, buf, len, SEND_FLAGS);
@@ -566,6 +567,7 @@ static void destroy(zhandle_t *zh)
     addrvec_free(&zh->addrs_new);
 }
 
+//初始化系统随机数
 static void setup_random()
 {
 #ifndef _WIN32          // TODO: better seed
@@ -624,6 +626,7 @@ static int getaddrinfo_errno(int rc) {
  * Count the number of hosts in the connection host string. This assumes it's
  * a well-formed connection string whereby each host is separated by a comma.
  */
+//hosts是一个以逗号划分的主机名列表，返回此列表中的主机名数目
 static int count_hosts(char *hosts)
 {
     uint32_t count = 0;
@@ -645,6 +648,7 @@ static int count_hosts(char *hosts)
  * The contents of the provided address vector will be initialized to an
  * empty state.
  */
+//分配hosts_in中指定的主机地址，将其存入到avec中，如果需要将其打乱
 static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *avec)
 {
     int rc = ZOK;
@@ -675,6 +679,7 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
     }
 
     // Allocate list inside avec
+    //初始化avec为num_hosts大小
     rc = addrvec_alloc_capacity(avec, num_hosts);
     if (rc != 0) {
         LOG_ERROR(LOGCALLBACK(zh), "out of memory");
@@ -683,9 +688,11 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
         goto fail;
     }
 
+    //遍历每个host
     host = strtok_r(hosts, ",", &strtok_last);
     while(host) {
-        char *port_spec = strrchr(host, ':');
+        //每个host都必须指出port配置
+    	char *port_spec = strrchr(host, ':');
         char *end_port_spec;
         int port;
         if (!port_spec) {
@@ -694,9 +701,9 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
             rc=ZBADARGUMENTS;
             goto fail;
         }
-        *port_spec = '\0';
+        *port_spec = '\0';//将':'更改为'\0'划分开host及port
         port_spec++;
-        port = strtol(port_spec, &end_port_spec, 0);
+        port = strtol(port_spec, &end_port_spec, 0);//转换port
         if (!*port_spec || *end_port_spec || port == 0) {
             LOG_ERROR(LOGCALLBACK(zh), "invalid port in %s", host);
             errno=EINVAL;
@@ -772,9 +779,11 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;
 
+        //跳过host前导的空格
         while(isspace(*host) && host != strtok_last)
             host++;
 
+        //转换host及port_spec对应的地址及端口
         if ((rc = getaddrinfo(host, port_spec, &hints, &res0)) != 0) {
             //bug in getaddrinfo implementation when it returns
             //EAI_BADFLAGS or EAI_ADDRFAMILY with AF_UNSPEC and
@@ -810,7 +819,8 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
         for (res = res0; res; res = res->ai_next) {
             // Expand address list if needed
             if (avec->count == avec->capacity) {
-                rc = addrvec_grow_default(avec);
+                //空间不足，扩展空间
+            	rc = addrvec_grow_default(avec);
                 if (rc != 0) {
                     LOG_ERROR(LOGCALLBACK(zh), "out of memory");
                     errno=ENOMEM;
@@ -820,6 +830,7 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
             }
 
             // Copy addrinfo into address list
+            //将地址信息填充到address list中
             switch (res->ai_family) {
             case AF_INET:
 #if defined(AF_INET6)
@@ -836,7 +847,7 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
 
         freeaddrinfo(res0);
 
-        host = strtok_r(0, ",", &strtok_last);
+        host = strtok_r(0, ",", &strtok_last);//分析其它port及host
         }
 #endif
     }
@@ -844,7 +855,7 @@ static int resolve_hosts(const zhandle_t *zh, const char *hosts_in, addrvec_t *a
 
     if(!disable_conn_permute){
         setup_random();
-        addrvec_shuffle(avec);
+        addrvec_shuffle(avec);//随机打乱avec数组
     }
 
     return ZOK;
@@ -914,6 +925,7 @@ int update_addrs(zhandle_t *zh)
         goto fail;
     }
 
+    //解析配置的主机名称及端口，并将解析结果存入到resolved数组中
     rc = resolve_hosts(zh, hosts, &resolved);
     if (rc != ZOK)
     {
@@ -921,6 +933,7 @@ int update_addrs(zhandle_t *zh)
     }
 
     // If the addrvec list is identical to last time we ran don't do anything
+    //如果两者完全相等，则goto fail,返回rc,即don't do anything
     if (addrvec_eq(&zh->addrs, &resolved))
     {
         goto fail;
@@ -930,14 +943,18 @@ int update_addrs(zhandle_t *zh)
     found_current = addrvec_contains(&resolved, &zh->addr_cur);
 
     // Clear out old and new address lists
+    //清掉addrs_old,addrs_new集
     zh->reconfig = 1;
     addrvec_free(&zh->addrs_old);
     addrvec_free(&zh->addrs_new);
 
     // Divide server list into addrs_old if in previous list and addrs_new if not
+    //遍历resolved列表
     for (i = 0; i < resolved.count; i++)
     {
-        struct sockaddr_storage *resolved_address = &resolved.data[i];
+        //如果resolved_address地址在addrs中，则将此地址加入addrs_old集合中
+    	//否则将其加入到addrs_new集合中
+    	struct sockaddr_storage *resolved_address = &resolved.data[i];
         if (addrvec_contains(&zh->addrs, resolved_address))
         {
             rc = addrvec_append(&zh->addrs_old, resolved_address);
@@ -1929,6 +1946,7 @@ static int send_set_watches(zhandle_t *zh)
     return (rc < 0)?ZMARSHALLINGERROR:ZOK;
 }
 
+//将req序列化到buffer中
 static int serialize_prime_connect(struct connect_req *req, char* buffer){
     //this should be the order of serialization
     int offset = 0;
@@ -1994,6 +2012,7 @@ static int deserialize_prime_response(struct prime_struct *resp, char* buffer)
      return 0;
 }
 
+//发送授权请求
 static int prime_connection(zhandle_t *zh)
 {
     int rc;
@@ -2011,11 +2030,12 @@ static int prime_connection(zhandle_t *zh)
     req.readOnly = zh->allow_read_only;
     hlen = htonl(len);
     /* We are running fast and loose here, but this string should fit in the initial buffer! */
-    rc=zookeeper_send(zh->fd, &hlen, sizeof(len));
-    serialize_prime_connect(&req, buffer_req);
-    rc=rc<0 ? rc : zookeeper_send(zh->fd, buffer_req, len);
+    rc=zookeeper_send(zh->fd, &hlen, sizeof(len));//发送长度
+    serialize_prime_connect(&req, buffer_req);//将req序列化到buffer_req中
+    rc=rc<0 ? rc : zookeeper_send(zh->fd, buffer_req, len);//发送buffer
     if (rc<0) {
-        return handle_socket_error_msg(zh, __LINE__, ZCONNECTIONLOSS,
+        //失败消息
+    	return handle_socket_error_msg(zh, __LINE__, ZCONNECTIONLOSS,
                 "failed to send a handshake packet: %s", strerror(errno));
     }
     zh->state = ZOO_ASSOCIATING_STATE;
@@ -2178,6 +2198,7 @@ static void zookeeper_set_sock_nodelay(zhandle_t *zh, socket_t sock)
     }
 }
 
+//通过指定socket连接对应的地址$addr
 static socket_t zookeeper_connect(zhandle_t *zh,
                                   struct sockaddr_storage *addr,
                                   socket_t fd)
@@ -2295,11 +2316,14 @@ int zookeeper_interest(zhandle_t *zh, socket_t *fd, int *interest,
               return api_epilog(zh, rc);
             }
 
+            //设置nodelay,noblock
             zookeeper_set_sock_nodelay(zh, zh->fd);
             zookeeper_set_sock_noblock(zh, zh->fd);
 
+            //连接到zh->addr_cur
             rc = zookeeper_connect(zh, &zh->addr_cur, zh->fd);
 
+            //连接失败处理
             if (rc == -1) {
                 /* we are handling the non-blocking connect according to
                  * the description in section 16.3 "Non-blocking connect"
@@ -2314,7 +2338,8 @@ int zookeeper_interest(zhandle_t *zh, socket_t *fd, int *interest,
                     return api_epilog(zh, rc);
                 }
             } else {
-                rc = prime_connection(zh);
+                //发送授权请求
+            	rc = prime_connection(zh);
                 if (rc != 0) {
                     return api_epilog(zh,rc);
                 }

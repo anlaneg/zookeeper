@@ -279,7 +279,7 @@ typedef struct _zhandle zhandle_t;
  */
 typedef struct {
     int64_t client_id;
-    char passwd[16];
+    char passwd[16];//密码
 } clientid_t;
 
 /**

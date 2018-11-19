@@ -37,7 +37,9 @@
  */
 typedef struct _addrvec {
     unsigned int next;                        // next index to use
+    //实际占用的大小
     unsigned int count;                       // number of addresses in this list
+    //申请的大小
     unsigned int capacity;                    // number of address this list can hold
     struct sockaddr_storage *data;   // list of addresses
 } addrvec_t;
