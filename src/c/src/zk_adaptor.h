@@ -213,6 +213,7 @@ struct _zhandle {
 
     // Message timings
     struct timeval last_recv;           // time last message was received
+    //记录最近一次发送的时间
     struct timeval last_send;           // time last message was sent
     struct timeval last_ping;           // time last PING was sent
     struct timeval next_deadline;       // time of the next deadline
@@ -221,8 +222,10 @@ struct _zhandle {
     // Buffers
     buffer_list_t *input_buffer;        // current buffer being read in
     buffer_head_t to_process;           // buffers that have been read and ready to be processed
+    //要发送的buffer
     buffer_head_t to_send;              // packets queued to send
     completion_head_t sent_requests;    // outstanding requests
+    //完成待处理队列
     completion_head_t completions_to_process; // completions that are ready to run
     int outstanding_sync;               // number of outstanding synchronous requests
 

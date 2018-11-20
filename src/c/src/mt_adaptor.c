@@ -219,9 +219,9 @@ void start_threads(zhandle_t* zh)
     // while initialization is in progress
     api_prolog(zh);
     LOG_DEBUG(LOGCALLBACK(zh), "starting threads...");
-    rc=pthread_create(&adaptor->io, 0, do_io, zh);
+    rc=pthread_create(&adaptor->io, 0, do_io, zh);//构造处理io的线程
     assert("pthread_create() failed for the IO thread"&&!rc);
-    rc=pthread_create(&adaptor->completion, 0, do_completion, zh);
+    rc=pthread_create(&adaptor->completion, 0, do_completion, zh);//构造处理完成的线程
     assert("pthread_create() failed for the completion thread"&&!rc);
     wait_for_others(zh);
     api_epilog(zh, 0);    
@@ -241,6 +241,7 @@ int adaptor_init(zhandle_t *zh)
     if (create_socket_pair(zh, adaptor_threads->self_pipe) == -1){
        LOG_ERROR(LOGCALLBACK(zh), "Can't make a socket.");
 #else
+    //构造pipe　fd
     if(pipe(adaptor_threads->self_pipe)==-1) {
         LOG_ERROR(LOGCALLBACK(zh), "Can't make a pipe %d",errno);
 #endif
@@ -390,6 +391,8 @@ void *do_io(void *v)
             interest=(fds[1].revents&POLLIN)?ZOOKEEPER_READ:0;
             interest|=((fds[1].revents&POLLOUT)||(fds[1].revents&POLLHUP))?ZOOKEEPER_WRITE:0;
         }
+
+        //可读取，自pipe中读取数据，并丢弃数据
         if(fds[0].revents&POLLIN){
             // flush the pipe
             char b[128];

@@ -1524,6 +1524,7 @@ static int queue_buffer_bytes(buffer_head_t *list, char *buff, int len)
     return ZOK;
 }
 
+//将buff加入到链表list中
 static int queue_front_buffer_bytes(buffer_head_t *list, char *buff, int len)
 {
     buffer_list_t *b  = allocate_buffer(buff,len);
@@ -1549,6 +1550,7 @@ static __attribute__ ((unused)) int get_queue_len(buffer_head_t *list)
  * 0 if send would block while sending the buffer (or a send was incomplete),
  * 1 if success
  */
+//buffer内容输出
 static int send_buffer(socket_t fd, buffer_list_t *buff)
 {
     int len = buff->len;
@@ -1599,6 +1601,7 @@ static int send_buffer(socket_t fd, buffer_list_t *buff)
  * 0 if recv would block,
  * 1 if success
  */
+//收取数据存入到buff中
 static int recv_buffer(zhandle_t *zh, buffer_list_t *buff)
 {
     int off = buff->curr_offset;
@@ -1854,6 +1857,7 @@ static int send_info_packet(zhandle_t *zh, auth_info* auth) {
     req.auth = auth->auth;
     rc = rc < 0 ? rc : serialize_AuthPacket(oa, "req", &req);
     /* add this buffer to the head of the send queue */
+    //将要发送的数据存入to_send链表，等待系统发送
     rc = rc < 0 ? rc : queue_front_buffer_bytes(&zh->to_send, get_buffer(oa),
             get_buffer_len(oa));
     /* We queued the buffer, so don't free it */
@@ -2440,7 +2444,7 @@ int zookeeper_interest(zhandle_t *zh, socket_t *fd, int *interest,
     return api_epilog(zh,ZOK);
 }
 
-static int check_events(zhandle_t *zh, int events)
+static int check_events(zhandle_t *zh, int events/*感兴趣的事件掩码*/)
 {
     if (zh->fd == -1)
         return ZINVALIDSTATE;
@@ -2464,6 +2468,8 @@ static int check_events(zhandle_t *zh, int events)
         LOG_INFO(LOGCALLBACK(zh), "initiated connection to server [%s]", format_endpoint_info(&zh->addr_cur));
         return ZOK;
     }
+
+    //关注写事件
     if (zh->to_send.head && (events&ZOOKEEPER_WRITE)) {
         /* make the flush call non-blocking by specifying a 0 timeout */
         int rc=flush_send_queue(zh,0);
@@ -2471,6 +2477,8 @@ static int check_events(zhandle_t *zh, int events)
             return handle_socket_error_msg(zh,__LINE__,ZCONNECTIONLOSS,
                 "failed while flushing send queue");
     }
+
+    //处理读事件
     if (events&ZOOKEEPER_READ) {
         int rc;
         if (zh->input_buffer == 0) {
@@ -2597,7 +2605,7 @@ static int queue_session_event(zhandle_t *zh, int state)
     /* We queued the buffer, so don't free it */
     close_buffer_oarchive(&oa, 0);
     cptr->c.watcher_result = collectWatchers(zh, ZOO_SESSION_EVENT, "");
-    queue_completion(&zh->completions_to_process, cptr, 0);
+    queue_completion(&zh->completions_to_process, cptr, 0);//添加至完成待处理队列
     if (process_async(zh->outstanding_sync)) {
         process_completions(zh);
     }
@@ -4173,6 +4181,7 @@ void zoo_check_op_init(zoo_op_t *op, const char *path, int version)
 
 /* specify timeout of 0 to make the function non-blocking */
 /* timeout is in milliseconds */
+//发送to_send链表中串连的数据，超时时间为timeout
 int flush_send_queue(zhandle_t*zh, int timeout)
 {
     int rc= ZOK;
@@ -4181,7 +4190,7 @@ int flush_send_queue(zhandle_t*zh, int timeout)
     fd_set pollSet;
     struct timeval wait;
 #endif
-    get_system_time(&started);
+    get_system_time(&started);//记录进入本函数时的时间
     // we can't use dequeue_buffer() here because if (non-blocking) send_buffer()
     // returns EWOULDBLOCK we'd have to put the buffer back on the queue.
     // we use a recursive lock instead and only dequeue the buffer if a send was
@@ -4197,6 +4206,7 @@ int flush_send_queue(zhandle_t*zh, int timeout)
             get_system_time(&now);
             elapsed=calculate_interval(&started,&now);
             if (elapsed>timeout) {
+            	//如果发送已使用足够时间，则跳出
                 rc = ZOPERATIONTIMEOUT;
                 break;
             }
@@ -4220,6 +4230,7 @@ int flush_send_queue(zhandle_t*zh, int timeout)
             }
         }
 
+        //输出to_send头部数据
         rc = send_buffer(zh->fd, zh->to_send.head);
         if(rc==0 && timeout==0){
             /* send_buffer would block while sending this buffer */
@@ -4231,8 +4242,10 @@ int flush_send_queue(zhandle_t*zh, int timeout)
             break;
         }
         // if the buffer has been sent successfully, remove it from the queue
+        //如果发送成功，则将头部buffer自队列中移除
         if (rc > 0)
             remove_buffer(&zh->to_send);
+        //记录最近一次发送的时间
         get_system_time(&zh->last_send);
         rc = ZOK;
     }

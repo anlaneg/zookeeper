@@ -666,6 +666,7 @@ int main(int argc, char **argv) {
     FILE *fh;
 
     if (argc < 2) {
+    	//指明参数格式
         fprintf(stderr,
                 "USAGE %s zookeeper_host_list [clientid_file|cmd:(ls|ls2|create|create2|od|...)]\n", 
                 argv[0]);
@@ -726,7 +727,7 @@ int main(int argc, char **argv) {
     verbose = 0;
     zoo_set_debug_level(ZOO_LOG_LEVEL_WARN);
     zoo_deterministic_conn_order(1); // enable deterministic order
-    hostPort = argv[1];
+    hostPort = argv[1];//解析出port
     zh = zookeeper_init(hostPort, watcher, 30000, &myid, NULL, flags);
     if (!zh) {
         return errno;
