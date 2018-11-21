@@ -212,6 +212,7 @@ struct _zhandle {
     watcher_fn watcher;                 // the registered watcher
 
     // Message timings
+    //记录最后一次收取到消息的时间
     struct timeval last_recv;           // time last message was received
     //记录最近一次发送的时间
     struct timeval last_send;           // time last message was sent
@@ -220,12 +221,16 @@ struct _zhandle {
     int recv_timeout;                   // max receive timeout for messages from server
 
     // Buffers
+    //用于临时存放自fd中读取到的内容
     buffer_list_t *input_buffer;        // current buffer being read in
+    //待处理消息队列（自对端读取后加入）
     buffer_head_t to_process;           // buffers that have been read and ready to be processed
-    //要发送的buffer
+    //需要发送给对端的buffer
     buffer_head_t to_send;              // packets queued to send
+    //当一个请求被发送出去后，其对应的响应处理就会被添加在此链上，由于响应需要按序回复，故
+    //刚收到一个响应，我们总是可以自此链上找到响应对应的响应处理回调
     completion_head_t sent_requests;    // outstanding requests
-    //完成待处理队列
+    //已完成，待本端处理队列（异步消息）
     completion_head_t completions_to_process; // completions that are ready to run
     int outstanding_sync;               // number of outstanding synchronous requests
 

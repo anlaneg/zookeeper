@@ -334,6 +334,7 @@ void processline(char *line) {
         line++;
     }
     if (startsWith(line, "help")) {
+      //显示命令提示
       fprintf(stderr, "    create [+[e|s]] <path>\n");
       fprintf(stderr, "    create2 [+[e|s]] <path>\n");
       fprintf(stderr, "    delete <path>\n");
@@ -366,12 +367,14 @@ void processline(char *line) {
         fprintf(stderr, "logging level set to DEBUG\n");
       }
     } else if (startsWith(line, "get ")) {
+    	//get命令处理，get后的参数必须以'/'开头指出path
         line += 4;
         if (line[0] != '/') {
             fprintf(stderr, "Path must start with /, found: %s\n", line);
             return;
         }
 
+        //发送get请求，并注册get的响应回调
         rc = zoo_aget(zh, line, 1, my_data_completion, strdup(line));
         if (rc) {
             fprintf(stderr, "Error %d for %s\n", rc, line);
@@ -491,6 +494,7 @@ void processline(char *line) {
            }
 
    } else if (startsWith(line, "set ")) {
+	   //set命令对应的路径
         char *ptr;
         line += 4;
         if (line[0] != '/') {
@@ -788,8 +792,9 @@ int main(int argc, char **argv) {
         } else {
             fd = 0;
         }
+        //检查标准输入是否可读取
         FD_SET(0, &rfds);
-        rc = select(fd+1, &rfds, &wfds, &efds, &tv);
+        rc = select(fd+1, &rfds, &wfds, &efds, &tv);//fd事件检测
         events = 0;
         if (rc > 0) {
             if (FD_ISSET(fd, &rfds)) {
@@ -811,7 +816,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Can't handle lines that long!\n");
                 exit(2);
             }
-            rc = read(0, buffer+bufoff, len);
+            rc = read(0, buffer+bufoff, len);//自标准输入中读取
             if (rc <= 0) {
                 fprintf(stderr, "bye\n");
                 break;
@@ -821,12 +826,15 @@ int main(int argc, char **argv) {
             while (strchr(buffer, '\n')) {
                 char *ptr = strchr(buffer, '\n');
                 *ptr = '\0';
+                //标准输入处理
                 processline(buffer);
                 ptr++;
                 memmove(buffer, ptr, strlen(ptr)+1);
                 bufoff = 0;
             }
         }
+
+        //事件处理
         zookeeper_process(zh, events);
     }
 #endif

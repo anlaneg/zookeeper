@@ -66,6 +66,7 @@ int lock_completion_list(completion_head_t *l)
 }
 int unlock_completion_list(completion_head_t *l)
 {
+	//触发信号量，知会completion线程进入处理
     pthread_cond_broadcast(&l->cond);
     return pthread_mutex_unlock(&l->lock);
 }
@@ -207,6 +208,7 @@ void notify_thread_ready(zhandle_t* zh)
 }
 
 
+//创建线程
 void start_threads(zhandle_t* zh)
 {
     int rc = 0;
@@ -219,9 +221,11 @@ void start_threads(zhandle_t* zh)
     // while initialization is in progress
     api_prolog(zh);
     LOG_DEBUG(LOGCALLBACK(zh), "starting threads...");
-    rc=pthread_create(&adaptor->io, 0, do_io, zh);//构造处理io的线程
+    //构造处理io的线程（接受其它线程发来的通知，接受server的读写事件）
+    rc=pthread_create(&adaptor->io, 0, do_io, zh);
     assert("pthread_create() failed for the IO thread"&&!rc);
-    rc=pthread_create(&adaptor->completion, 0, do_completion, zh);//构造处理完成的线程
+    //构造处理完成的线程
+    rc=pthread_create(&adaptor->completion, 0, do_completion, zh);
     assert("pthread_create() failed for the completion thread"&&!rc);
     wait_for_others(zh);
     api_epilog(zh, 0);    
@@ -248,6 +252,7 @@ int adaptor_init(zhandle_t *zh)
         free(adaptor_threads);
         return -1;
     }
+    //置非阻塞
     set_nonblock(adaptor_threads->self_pipe[1]);
     set_nonblock(adaptor_threads->self_pipe[0]);
 
@@ -327,6 +332,7 @@ int wakeup_io_thread(zhandle_t *zh)
     struct adaptor_threads *adaptor_threads = zh->adaptor_priv;
     char c=0;
 #ifndef WIN32
+    //向self_pipe[1]的对端发送通知
     return write(adaptor_threads->self_pipe[1],&c,1)==1? ZOK: ZSYSTEMERROR;    
 #else
     return send(adaptor_threads->self_pipe[1], &c, 1, 0)==1? ZOK: ZSYSTEMERROR;    
@@ -367,6 +373,7 @@ void *do_io(void *v)
     api_prolog(zh);
     notify_thread_ready(zh);
     LOG_DEBUG(LOGCALLBACK(zh), "started IO thread");
+    //读取self_pipe[0]
     fds[0].fd=adaptor_threads->self_pipe[0];
     fds[0].events=POLLIN;
     while(!zh->close_requested) {
@@ -386,13 +393,14 @@ void *do_io(void *v)
         }
         timeout=tv.tv_sec * 1000 + (tv.tv_usec/1000);
         
+        //如果无通知，或者fds[1]中无读写事件，则在timeout时间中阻塞
         poll(fds,maxfd,timeout);
         if (fd != -1) {
             interest=(fds[1].revents&POLLIN)?ZOOKEEPER_READ:0;
             interest|=((fds[1].revents&POLLOUT)||(fds[1].revents&POLLHUP))?ZOOKEEPER_WRITE:0;
         }
 
-        //可读取，自pipe中读取数据，并丢弃数据
+        //可读取，自pipe中读取数据，并丢弃数据(仅用于通知，数据没意义）
         if(fds[0].revents&POLLIN){
             // flush the pipe
             char b[128];
@@ -465,6 +473,7 @@ void *do_io(void *v)
 #ifdef WIN32
 unsigned __stdcall do_completion( void * v)
 #else
+//完成completion队列回调触发
 void *do_completion(void *v)
 #endif
 {
@@ -475,9 +484,11 @@ void *do_completion(void *v)
     while(!zh->close_requested) {
         pthread_mutex_lock(&zh->completions_to_process.lock);
         while(!zh->completions_to_process.head && !zh->close_requested) {
-            pthread_cond_wait(&zh->completions_to_process.cond, &zh->completions_to_process.lock);
+            //等待触发信号量
+        	pthread_cond_wait(&zh->completions_to_process.cond, &zh->completions_to_process.lock);
         }
         pthread_mutex_unlock(&zh->completions_to_process.lock);
+        //处理completion队列
         process_completions(zh);
     }
     api_epilog(zh, 0);    

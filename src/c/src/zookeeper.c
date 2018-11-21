@@ -100,13 +100,13 @@ const int ZOOKEEPER_READ = 1 << 1;
 const int ZOO_EPHEMERAL = 1 << 0;
 const int ZOO_SEQUENCE = 1 << 1;
 
-const int ZOO_EXPIRED_SESSION_STATE = EXPIRED_SESSION_STATE_DEF;
-const int ZOO_AUTH_FAILED_STATE = AUTH_FAILED_STATE_DEF;
-const int ZOO_CONNECTING_STATE = CONNECTING_STATE_DEF;
-const int ZOO_ASSOCIATING_STATE = ASSOCIATING_STATE_DEF;
-const int ZOO_CONNECTED_STATE = CONNECTED_STATE_DEF;
-const int ZOO_READONLY_STATE = READONLY_STATE_DEF;
-const int ZOO_NOTCONNECTED_STATE = NOTCONNECTED_STATE_DEF;
+const int ZOO_EXPIRED_SESSION_STATE = EXPIRED_SESSION_STATE_DEF;//session过期状态
+const int ZOO_AUTH_FAILED_STATE = AUTH_FAILED_STATE_DEF;//授权失败状态
+const int ZOO_CONNECTING_STATE = CONNECTING_STATE_DEF;//正在连接
+const int ZOO_ASSOCIATING_STATE = ASSOCIATING_STATE_DEF;//双方关联上（联系上）
+const int ZOO_CONNECTED_STATE = CONNECTED_STATE_DEF;//已连接
+const int ZOO_READONLY_STATE = READONLY_STATE_DEF;//已连接，但处于readonly状态
+const int ZOO_NOTCONNECTED_STATE = NOTCONNECTED_STATE_DEF;//未连接状态
 
 static __attribute__ ((unused)) const char* state2String(int state){
     switch(state){
@@ -187,15 +187,24 @@ typedef struct _auth_completion_list {
 } auth_completion_list_t;
 
 typedef struct completion {
+	//completiono类型，决定使用那个union成员
     int type; /* one of COMPLETION_* values above */
     union {
+    	//COMPLETION_VOID，COMPLETION_MULTI时使用
         void_completion_t void_result;
+        //COMPLETION_STAT时使用
         stat_completion_t stat_result;
+        //COMPLETION_DATA时使用
         data_completion_t data_result;
+        //COMPLETION_STRINGLIST时使用
         strings_completion_t strings_result;
+        //COMPLETION_STRINGLIST_STAT时使用
         strings_stat_completion_t strings_stat_result;
+        //COMPLETION_ACLLIST时使用
         acl_completion_t acl_result;
+        //COMPLETION_STRING时使用
         string_completion_t string_result;
+        //COMPLETION_STRING_STAT时使用
         string_stat_completion_t string_stat_result;
         struct watcher_object_list *watcher_result;
     };
@@ -203,7 +212,7 @@ typedef struct completion {
 } completion_t;
 
 typedef struct _completion_list {
-    int xid;
+    int xid;//事务id（用于保序）
     completion_t c;
     const void *data;
     buffer_list_t *buffer;
@@ -1601,7 +1610,7 @@ static int send_buffer(socket_t fd, buffer_list_t *buff)
  * 0 if recv would block,
  * 1 if success
  */
-//收取数据存入到buff中
+//自fd收取数据存入到buff中
 static int recv_buffer(zhandle_t *zh, buffer_list_t *buff)
 {
     int off = buff->curr_offset;
@@ -2016,7 +2025,7 @@ static int deserialize_prime_response(struct prime_struct *resp, char* buffer)
      return 0;
 }
 
-//发送授权请求
+//发送基本连接请求
 static int prime_connection(zhandle_t *zh)
 {
     int rc;
@@ -2044,6 +2053,7 @@ static int prime_connection(zhandle_t *zh)
     }
     zh->state = ZOO_ASSOCIATING_STATE;
 
+    //使zh->input_buffer指向primer_buffer,用于后面分辨授权包响应的识别
     zh->input_buffer = &zh->primer_buffer;
     memset(zh->input_buffer->buffer, 0, zh->input_buffer->len);
 
@@ -2448,6 +2458,7 @@ static int check_events(zhandle_t *zh, int events/*感兴趣的事件掩码*/)
 {
     if (zh->fd == -1)
         return ZINVALIDSTATE;
+
     if ((events&ZOOKEEPER_WRITE)&&(zh->state == ZOO_CONNECTING_STATE)) {
         int rc, error;
         socklen_t len = sizeof(error);
@@ -2469,7 +2480,7 @@ static int check_events(zhandle_t *zh, int events/*感兴趣的事件掩码*/)
         return ZOK;
     }
 
-    //关注写事件
+    //有需要发送给对端的消息，且关注写事件，清空to_send链表
     if (zh->to_send.head && (events&ZOOKEEPER_WRITE)) {
         /* make the flush call non-blocking by specifying a 0 timeout */
         int rc=flush_send_queue(zh,0);
@@ -2481,21 +2492,26 @@ static int check_events(zhandle_t *zh, int events/*感兴趣的事件掩码*/)
     //处理读事件
     if (events&ZOOKEEPER_READ) {
         int rc;
+        //如果buffer未申请，则申请
         if (zh->input_buffer == 0) {
             zh->input_buffer = allocate_buffer(0,0);
         }
 
+        //收取消息，并存入到zh->input_buffer
         rc = recv_buffer(zh, zh->input_buffer);
         if (rc < 0) {
             return handle_socket_error_msg(zh, __LINE__,ZCONNECTIONLOSS,
                 "failed while receiving a server response");
         }
         if (rc > 0) {
-            get_system_time(&zh->last_recv);
+            //记录最近一次收取到消息的时间
+        	get_system_time(&zh->last_recv);
             if (zh->input_buffer != &zh->primer_buffer) {
-                queue_buffer(&zh->to_process, zh->input_buffer, 0);
+                //非握手响应报文，则加入待处理队列
+            	queue_buffer(&zh->to_process, zh->input_buffer, 0);
             } else  {
-                int64_t oldid, newid;
+                //处理握手响应报文
+            	int64_t oldid, newid;
                 //deserialize
                 deserialize_prime_response(&zh->primer_storage, zh->primer_buffer.buffer);
                 /* We are processing the primer_buffer, so we need to finish
@@ -2504,7 +2520,8 @@ static int check_events(zhandle_t *zh, int events/*感兴趣的事件掩码*/)
                 zh->seen_rw_server_before |= !zh->primer_storage.readOnly;
                 newid = zh->primer_storage.sessionId;
                 if (oldid != 0 && oldid != newid) {
-                    zh->state = ZOO_EXPIRED_SESSION_STATE;
+                    //两者session id不相等，session过期
+                	zh->state = ZOO_EXPIRED_SESSION_STATE;
                     errno = ESTALE;
                     return handle_socket_error_msg(zh,__LINE__,ZSESSIONEXPIRED,
                             "sessionId=%#llx has expired.",oldid);
@@ -2526,7 +2543,7 @@ static int check_events(zhandle_t *zh, int events/*感兴趣的事件掩码*/)
                        we need to call send_watch_set first */
                     send_set_watches(zh);
                     /* send the authentication packet now */
-                    send_auth_info(zh);
+                    send_auth_info(zh);//发送授权报文
                     LOG_DEBUG(LOGCALLBACK(zh), "Calling a watcher for a ZOO_SESSION_EVENT and the state=ZOO_CONNECTED_STATE");
                     zh->input_buffer = 0; // just in case the watcher calls zookeeper_process() again
                     PROCESS_SESSION_EVENT(zh, zh->state);
@@ -2594,6 +2611,7 @@ static int queue_session_event(zhandle_t *zh, int state)
         close_buffer_oarchive(&oa, 1);
         goto error;
     }
+    //创建completion_entry(空）
     cptr = create_completion_entry(zh, WATCHER_EVENT_XID,-1,0,0,0,0);
     cptr->buffer = allocate_buffer(get_buffer(oa), get_buffer_len(oa));
     cptr->buffer->curr_offset = get_buffer_len(oa);
@@ -2605,7 +2623,8 @@ static int queue_session_event(zhandle_t *zh, int state)
     /* We queued the buffer, so don't free it */
     close_buffer_oarchive(&oa, 0);
     cptr->c.watcher_result = collectWatchers(zh, ZOO_SESSION_EVENT, "");
-    queue_completion(&zh->completions_to_process, cptr, 0);//添加至完成待处理队列
+    //添加至完成待处理队列
+    queue_completion(&zh->completions_to_process, cptr, 0);
     if (process_async(zh->outstanding_sync)) {
         process_completions(zh);
     }
@@ -2663,7 +2682,8 @@ static int deserialize_multi(zhandle_t *zh, int xid, completion_list_t *cptr, st
     return rc;
 }
 
-static void deserialize_response(zhandle_t *zh, int type, int xid, int failed, int rc, completion_list_t *cptr, struct iarchive *ia)
+//触发completion回调
+static void deserialize_response(zhandle_t *zh, int type/*completion类型*/, int xid, int failed, int rc, completion_list_t *cptr, struct iarchive *ia)
 {
     switch (type) {
     case COMPLETION_DATA:
@@ -2772,14 +2792,17 @@ static void deserialize_response(zhandle_t *zh, int type, int xid, int failed, i
 
 
 /* handles async completion (both single- and multithreaded) */
+//自completion队列中摘取一个completion，并调用其completion回调，实现异常io请求的响应处理部分
 void process_completions(zhandle_t *zh)
 {
     completion_list_t *cptr;
+    //自待处理的completion队列中摘取一个completion,并处理
     while ((cptr = dequeue_completion(&zh->completions_to_process)) != 0) {
         struct ReplyHeader hdr;
         buffer_list_t *bptr = cptr->buffer;
         struct iarchive *ia = create_buffer_iarchive(bptr->buffer,
                 bptr->len);
+        //反序列化hdr
         deserialize_ReplyHeader(ia, "hdr", &hdr);
 
         if (hdr.xid == WATCHER_EVENT_XID) {
@@ -2796,7 +2819,8 @@ void process_completions(zhandle_t *zh)
             deliverWatchers(zh,type,state,evt.path, &cptr->c.watcher_result);
             deallocate_WatcherEvent(&evt);
         } else {
-            deserialize_response(zh, cptr->c.type, hdr.xid, hdr.err != 0, hdr.err, cptr, ia);
+            //处理响应消息
+        	deserialize_response(zh, cptr->c.type, hdr.xid, hdr.err != 0, hdr.err, cptr, ia);
         }
         destroy_completion_entry(cptr);
         close_buffer_iarchive(&ia);
@@ -2861,12 +2885,14 @@ int zookeeper_process(zhandle_t *zh, int events)
 
     IF_DEBUG(isSocketReadable(zh));
 
+    //自to_process队列中取响应，并处理，针对异步消息，需要重新添加到异步完成链表上
     while (rc >= 0 && (bptr=dequeue_buffer(&zh->to_process))) {
         struct ReplyHeader hdr;
         struct iarchive *ia = create_buffer_iarchive(
                                     bptr->buffer, bptr->curr_offset);
         deserialize_ReplyHeader(ia, "hdr", &hdr);
 
+        //先检查是否为特殊的事务id
         if (hdr.xid == PING_XID) {
             // Ping replies can arrive out-of-order
             int elapsed = 0;
@@ -2898,6 +2924,7 @@ int zookeeper_process(zhandle_t *zh, int events)
             LOG_DEBUG(LOGCALLBACK(zh), "Processing SET_WATCHES");
             free_buffer(bptr);
         } else if (hdr.xid == AUTH_XID){
+        	//处理授权事务
             LOG_DEBUG(LOGCALLBACK(zh), "Processing AUTH_XID");
 
             /* special handling for the AUTH response as it may come back
@@ -2912,8 +2939,10 @@ int zookeeper_process(zhandle_t *zh, int events)
                 return api_epilog(zh, ZAUTHFAILED);
             }
         } else {
-            int rc = hdr.err;
+            //其它类型事务id
+        	int rc = hdr.err;
             /* Find the request corresponding to the response */
+        	//找到响应对应的请求（首个即是，即找到处理此响应的回调）
             completion_list_t *cptr = dequeue_completion(&zh->sent_requests);
 
             /* [ZOOKEEPER-804] Don't assert if zookeeper_close has been called. */
@@ -2926,7 +2955,8 @@ int zookeeper_process(zhandle_t *zh, int events)
             assert(cptr);
             /* The requests are going to come back in order */
             if (cptr->xid != hdr.xid) {
-                LOG_DEBUG(LOGCALLBACK(zh), "Processing unexpected or out-of-order response!");
+                //事务未按序响应，将cptr加回到队列，报错
+            	LOG_DEBUG(LOGCALLBACK(zh), "Processing unexpected or out-of-order response!");
 
                 // received unexpected (or out-of-order) response
                 close_buffer_iarchive(&ia);
@@ -2947,6 +2977,7 @@ int zookeeper_process(zhandle_t *zh, int events)
             activateWatcher(zh, cptr->watcher, rc);
             deactivateWatcher(zh, cptr->watcher_deregistration, rc);
 
+            //非同步消息，直接将其入队到completions_to_process队列
             if (cptr->c.void_result != SYNCHRONOUS_MARKER) {
                 LOG_DEBUG(LOGCALLBACK(zh), "Queueing asynchronous response");
                 cptr->buffer = bptr;
@@ -2957,6 +2988,7 @@ int zookeeper_process(zhandle_t *zh, int events)
                         *sc = (struct sync_completion*)cptr->data;
                 sc->rc = rc;
 
+                //处理同步消息完成
                 process_sync_completion(zh, cptr, sc, ia);
 
                 notify_sync_completion(sc);
@@ -2964,7 +2996,7 @@ int zookeeper_process(zhandle_t *zh, int events)
                 zh->outstanding_sync--;
                 destroy_completion_entry(cptr);
 #else
-                abort_singlethreaded(zh);
+                abort_singlethreaded(zh);//填接挂，这种情况不容许
 #endif
             }
         }
@@ -2986,6 +3018,7 @@ int zoo_state(zhandle_t *zh)
     return 0;
 }
 
+//创建并注册一个watcher
 static watcher_registration_t* create_watcher_registration(const char* path,
         result_checker_fn checker,watcher_fn watcher,void* ctx){
     watcher_registration_t* wo;
@@ -3085,7 +3118,7 @@ static completion_list_t* do_create_completion_entry(zhandle_t *zh, int xid,
         c->c.clist = *clist;
         break;
     }
-    c->xid = xid;
+    c->xid = xid;//事务id
     c->watcher = wo;
     c->watcher_deregistration = wdo;
 
@@ -3126,6 +3159,7 @@ static void queue_completion_nolock(completion_head_t *list,
     }
 }
 
+//将completion加入到list中，并触发信号量
 static void queue_completion(completion_head_t *list, completion_list_t *c,
         int add_to_front)
 {
